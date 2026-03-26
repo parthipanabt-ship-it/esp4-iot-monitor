@@ -1,0 +1,190 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>IoT Smart Station | AI Voice Dashboard</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/paho-mqtt/1.0.1/mqttws31.min.js"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;600&display=swap');
+        body { font-family: 'Plus Jakarta Sans', sans-serif; background-color: #0b0f1a; color: #ffffff; transition: background-color 0.8s ease; }
+        .glass { background: rgba(255, 255, 255, 0.03); backdrop-filter: blur(12px); border: 1px solid rgba(255, 255, 255, 0.1); transition: all 0.3s ease; }
+        .status-pulse { animation: pulse-red 1.5s infinite; }
+        @keyframes pulse-red { 0% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.7); } 70% { box-shadow: 0 0 0 15px rgba(239, 68, 68, 0); } 100% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0); } }
+    </style>
+</head>
+<body class="p-6 md:p-12 min-h-screen flex flex-col items-center">
+
+    <div class="max-w-6xl mx-auto w-full flex flex-col md:flex-row justify-between items-center mb-12">
+        <div>
+            <h1 class="text-4xl font-bold tracking-tight">Smart Station <span class="text-indigo-500">Live</span></h1>
+            <p class="text-slate-400 mt-1 font-light tracking-wide uppercase text-xs italic">AI-Integrated Safety Protocol</p>
+        </div>
+        <div id="connection-badge" class="mt-4 md:mt-0 px-5 py-2 rounded-full text-sm font-semibold bg-yellow-500/10 text-yellow-500 border border-yellow-500/20">
+            ● Syncing with Cloud...
+        </div>
+    </div>
+
+    <div class="max-w-6xl mx-auto w-full grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+        
+        <div class="glass p-8 rounded-3xl">
+            <span class="text-slate-400 text-xs font-bold uppercase tracking-widest">Temperature</span>
+            <h2 id="temp-val" class="text-6xl font-bold mt-4">--<span class="text-2xl text-slate-500 ml-1">°C</span></h2>
+            <div class="mt-6 h-1.5 w-full bg-slate-800 rounded-full overflow-hidden">
+                <div id="temp-bar" class="h-full bg-gradient-to-r from-orange-400 to-red-500 transition-all duration-1000" style="width: 0%"></div>
+            </div>
+        </div>
+
+        <div class="glass p-8 rounded-3xl">
+            <span class="text-slate-400 text-xs font-bold uppercase tracking-widest">Humidity</span>
+            <h2 id="hum-val" class="text-6xl font-bold mt-4">--<span class="text-2xl text-slate-500 ml-1">%</span></h2>
+            <div class="mt-6 h-1.5 w-full bg-slate-800 rounded-full overflow-hidden">
+                <div id="hum-bar" class="h-full bg-gradient-to-r from-blue-400 to-cyan-400 transition-all duration-1000" style="width: 0%"></div>
+            </div>
+        </div>
+
+        <div class="glass p-8 rounded-3xl">
+            <span class="text-slate-400 text-xs font-bold uppercase tracking-widest">Gas (MQ2)</span>
+            <h2 id="gas-val" class="text-6xl font-bold mt-4">---</h2>
+            <p id="gas-status" class="mt-4 text-xs font-semibold text-emerald-400 uppercase">Air Clean</p>
+        </div>
+
+        <div class="glass p-8 rounded-3xl bg-indigo-500/5 border-indigo-500/20 flex flex-col items-center justify-center text-center">
+            <span class="text-indigo-400 text-xs font-bold uppercase tracking-widest mb-4">Voice Assistant</span>
+            <button onclick="startVoiceAI()" id="mic-btn" class="w-16 h-16 bg-indigo-600 rounded-full flex items-center justify-center shadow-lg shadow-indigo-500/40 hover:scale-110 active:scale-95 transition-all">
+                <span id="mic-icon" class="text-2xl">🎤</span>
+            </button>
+            <p id="ai-status-text" class="mt-4 text-sm text-slate-400 font-medium italic">"Ask me for status or humidity"</p>
+        </div>
+
+    </div>
+
+    <div class="max-w-6xl mx-auto w-full mt-6">
+        <div id="flame-card" class="glass p-8 rounded-3xl transition-all duration-500 flex flex-col md:flex-row justify-between items-center">
+            <div>
+                <span class="text-slate-400 text-xs font-bold uppercase tracking-widest">Fire Detection Scan</span>
+                <h2 id="flame-text" class="text-2xl font-bold mt-2 text-slate-300">Scanning Area...</h2>
+            </div>
+            <div id="flame-led" class="mt-4 md:mt-0 w-4 h-4 rounded-full bg-slate-700"></div>
+        </div>
+    </div>
+
+    <footer class="max-w-6xl mx-auto w-full mt-12 flex justify-between items-center text-slate-500 text-sm pt-8 border-t border-white/5">
+        <div>Safety IoT Hub • 2026</div>
+        <div id="last-updated">Waiting for sensor data...</div>
+    </footer>
+
+    <script>
+        // --- HIVEMQ CONFIG ---
+        const BROKER_HOST = "ba98ce8821cf4846974ee6004d153172.s1.eu.hivemq.cloud";
+        const BROKER_PORT = 8884; 
+        const MQTT_USER = "iot_user";
+        const MQTT_PASS = "Pass1234567";
+        const TOPIC = "home/sensors";
+        const CLIENT_ID = "IoT_Assistant_" + Math.random().toString(16).substr(2, 8);
+
+        const client = new Paho.MQTT.Client(BROKER_HOST, BROKER_PORT, CLIENT_ID);
+        const synth = window.speechSynthesis;
+        const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+        
+        let currentData = { temp: 0, hum: 0, gas: 0, flame: 0 };
+        let lastAlertTime = 0;
+
+        // --- MQTT HANDLERS ---
+        const onConnect = () => {
+            document.getElementById('connection-badge').innerText = "● System Online";
+            document.getElementById('connection-badge').className = "px-5 py-2 rounded-full text-sm font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20";
+            client.subscribe(TOPIC);
+        };
+
+        const onMessageArrived = (message) => {
+            currentData = JSON.parse(message.payloadString);
+            document.getElementById('last-updated').innerText = "Last sync: " + new Date().toLocaleTimeString();
+
+            // Card Updates
+            document.getElementById('temp-val').innerHTML = currentData.temp + '<span class="text-2xl text-slate-500 ml-1">°C</span>';
+            document.getElementById('temp-bar').style.width = (currentData.temp * 2) + '%';
+            document.getElementById('hum-val').innerHTML = currentData.hum + '<span class="text-2xl text-slate-500 ml-1">%</span>';
+            document.getElementById('hum-bar').style.width = currentData.hum + '%';
+            document.getElementById('gas-val').innerText = currentData.gas;
+
+            // --- AUTOMATIC VOICE ALERT FOR FLAME ---
+            if (currentData.flame == 1 && (Date.now() - lastAlertTime > 12000)) {
+                speak("Warning. Fire detected. Please check your surroundings immediately.");
+                lastAlertTime = Date.now();
+            }
+
+            // Visual Alert Styling
+            const isDanger = (currentData.flame == 1 || currentData.gas > 600);
+            if (isDanger) {
+                document.body.style.backgroundColor = "#450a0a";
+                document.getElementById('connection-badge').className = "px-5 py-2 rounded-full text-sm font-semibold bg-red-600 text-white animate-pulse";
+                document.getElementById('connection-badge').innerText = "⚠️ DANGER DETECTED";
+            } else {
+                document.body.style.backgroundColor = "#0b0f1a";
+                document.getElementById('connection-badge').innerText = "● System Online";
+            }
+
+            const fCard = document.getElementById('flame-card');
+            const fText = document.getElementById('flame-text');
+            if(currentData.flame == 1) {
+                fText.innerText = "FIRE ALERT";
+                fText.className = "text-2xl font-bold mt-2 text-red-500";
+                fCard.classList.add('status-pulse', 'border-red-500/50');
+            } else {
+                fText.innerText = "Safe & Secure";
+                fText.className = "text-2xl font-bold mt-2 text-emerald-400";
+                fCard.classList.remove('status-pulse', 'border-red-500/50');
+            }
+        };
+
+        // --- VOICE AI LOGIC ---
+        if (SpeechRecognition) {
+            const recognition = new SpeechRecognition();
+            recognition.lang = 'en-US';
+
+            window.startVoiceAI = () => {
+                recognition.start();
+                document.getElementById('mic-btn').classList.add('animate-pulse', 'bg-red-500');
+                document.getElementById('ai-status-text').innerText = "Listening...";
+            };
+
+            recognition.onresult = (event) => {
+                const cmd = event.results[0][0].transcript.toLowerCase();
+                document.getElementById('mic-btn').classList.remove('animate-pulse', 'bg-red-500');
+                document.getElementById('ai-status-text').innerText = `Recognized: "${cmd}"`;
+                
+                let response = "I didn't catch that. You can ask for status or humidity.";
+
+                if (cmd.includes("status") || cmd.includes("report") || cmd.includes("how is it")) {
+                    response = `System status is healthy. Temperature is ${currentData.temp} degrees. Humidity is ${currentData.hum} percent. Gas level is ${currentData.gas}. Safety scan is ${document.getElementById('flame-text').innerText}.`;
+                } 
+                else if (cmd.includes("humidity") || cmd.includes("moisture")) {
+                    response = `The current humidity reading is ${currentData.hum} percent.`;
+                }
+                else if (cmd.includes("gas") || cmd.includes("air")) {
+                    response = `The air quality sensor shows ${currentData.gas} parts per million.`;
+                }
+                else if (cmd.includes("temperature") || cmd.includes("hot")) {
+                    response = `The temperature is ${currentData.temp} degrees Celsius.`;
+                }
+
+                speak(response);
+            };
+        }
+
+        function speak(text) {
+            const utterance = new SpeechSynthesisUtterance(text);
+            utterance.rate = 0.95;
+            utterance.pitch = 1.0;
+            synth.speak(utterance);
+        }
+
+        const options = { useSSL: true, userName: MQTT_USER, password: MQTT_PASS, onSuccess: onConnect, onFailure: (e) => console.log(e) };
+        client.onMessageArrived = onMessageArrived;
+        client.onConnectionLost = () => setTimeout(() => client.connect(options), 5000);
+        client.connect(options);
+    </script>
+</body>
+</html>
